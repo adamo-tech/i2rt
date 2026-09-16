@@ -53,7 +53,7 @@ With setup done, run the sample script. It drives two YAM arms (`linear_4310` gr
 `can1` in lockstep, tracing a 15 cm square in the xz plane:
 
 ```bash
-python3 examples/task_space_square/task_space_square.py --arm-left can1 --arm-right can0
+uv run  examples/task_space_square/task_space_square.py --arm-left can1 --arm-right can0
 ```
 
 ## Teleop
@@ -62,8 +62,8 @@ Drive both arms from a pair of VR controllers over Adamo. `uv run` installs the 
 first launch:
 
 ```bash
-export ADAMO_API_KEY=<secret_key>
-uv run examples/adamo_teleop/adamo_teleop.py
+export ADAMO_API_KEY=<secret_key> # you can get the api key at https://operate.adamohq.com/#/settings
+uv run examples/adamo_teleop/adamo_teleop.py --arm-right can0 --arm-left can1 --eye-right /dev/video4  --eye-left /dev/video6
 ```
 
 ## YAM Arm

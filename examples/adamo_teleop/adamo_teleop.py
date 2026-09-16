@@ -11,24 +11,40 @@ The operator's view is the rig's two USB cameras, composited side by side into o
 in the Rust runtime, so no frame crosses into Python.
 
     export ADAMO_API_KEY=ak_...
-    uv run examples/adamo_teleop/adamo_teleop.py
+    uv run examples/adamo_teleop/adamo_teleop.py --arm-left can1 --arm-right can0 \
+        --left-eye /dev/video6 --right-eye /dev/video4
 """
 
 import os
 import threading
 import time
+from dataclasses import dataclass
 
 import adamo
 import jaxlie
 import numpy as np
+import tyro
 from adamo.xr import PoseStamped, XRJoy, subscribe_xr_control
 from yam_ik import VELOCITY_LIMITS, YamIK
 
 from i2rt.robots.get_robot import get_yam_robot
 from i2rt.robots.utils import ArmType, GripperType
 
+
+@dataclass
+class Args:
+    """Name one arm to run it alone; name neither to run both, left on can1 and right on can0."""
+
+    arm_left: str | None = None
+    arm_right: str | None = None
+    # Composited into one stereo track. Each camera has a pair of nodes; only the even one captures.
+    eye_left: str = "/dev/video6"
+    eye_right: str = "/dev/video4"
+
+
+args = tyro.cli(Args)
 NAME = "yam-san-mateo"
-ARMS = (("can1", "left"), ("can0", "right"))
+ARMS = [(ch, side) for ch, side in ((args.arm_left, "left"), (args.arm_right, "right")) if ch]
 # Where the arms settle when unpowered, read off both arms and averaged, so cutting
 # power from the ready pose doesn't drop them.
 READY = np.array([0.0, 0.58, 0.57, -0.11, 0.07, 0.0])
@@ -38,14 +54,11 @@ DT = 0.02
 HOME_SPEED = VELOCITY_LIMITS / 6.0
 
 TRACK = "zed"
-# The rig's two USB cameras, in left/right order. Each is one of a pair of nodes on its
-# own USB device (3-1 and 3-2); the odd-numbered twins carry no capture formats.
-EYES = ("/dev/video6", "/dev/video4")
 # 1080p per eye, a mode both cameras offer. The composite is what has to fit the
 # 4096-pixel width an H.264 encoder (and a headset decoder) will take, so this is
 # 3840 wide on the wire.
 EYE_WIDTH, EYE_HEIGHT, FPS = 1920, 1080, 30
-BITRATE_KBPS = 12000
+BITRATE_KBPS = 4000
 
 # WebXR local-floor (+x right, +y up, -z forward) -> arm world (+x forward, +y left, +z up).
 XR2W = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -106,8 +119,8 @@ PIPELINE = "  ".join(
         f"compositor name=sbs background=black sink_0::xpos=0 sink_1::xpos={EYE_WIDTH}"
         f' ! capsfilter caps="video/x-raw,format=NV12,width={2 * EYE_WIDTH},'
         f'height={EYE_HEIGHT},framerate={FPS}/1"',
-        eye_branch(EYES[0], "sbs.sink_0"),
-        eye_branch(EYES[1], "sbs.sink_1"),
+        eye_branch(args.eye_left, "sbs.sink_0"),
+        eye_branch(args.eye_right, "sbs.sink_1"),
     )
 )
 
