@@ -22,14 +22,16 @@ import adamo
 import jaxlie
 import numpy as np
 from adamo.xr import PoseStamped, XRJoy, subscribe_xr_control
-from yam_ik import REST_POSE, VELOCITY_LIMITS, YamIK
+from yam_ik import VELOCITY_LIMITS, YamIK
 
 from i2rt.robots.get_robot import get_yam_robot
 from i2rt.robots.utils import ArmType, GripperType
 
 NAME = "yam-san-mateo"
-ARMS = (("can0", "left"), ("can1", "right"))
-READY = REST_POSE  # the IK's posture bias, so the arm starts where the solver wants to sit
+ARMS = (("can1", "left"), ("can0", "right"))
+# Where the arms settle when unpowered, read off both arms and averaged, so cutting
+# power from the ready pose doesn't drop them.
+READY = np.array([0.0, 0.58, 0.57, -0.11, 0.07, 0.0])
 DT = 0.02
 # Rehoming runs a sixth of the speed the IK clamps hand-tracking to: nobody is steering it,
 # so it should look deliberate rather than as quick as the arm can manage.
