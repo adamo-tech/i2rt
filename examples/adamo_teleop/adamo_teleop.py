@@ -52,6 +52,8 @@ DT = 0.02
 # Rehoming runs a sixth of the speed the IK clamps hand-tracking to: nobody is steering it,
 # so it should look deliberate rather than as quick as the arm can manage.
 HOME_SPEED = VELOCITY_LIMITS / 6.0
+# Newtons the gripper holds once it closes on something: a tenth of the library's 50 N default.
+GRIPPER_FORCE = 1.0
 
 TRACK = "zed"
 # 1080p per eye, a mode both cameras offer. The composite is what has to fit the
@@ -132,7 +134,12 @@ class Arm:
 
     def __init__(self, channel: str, side: str) -> None:
         self.side = side
-        self.robot = get_yam_robot(channel=channel, arm_type=ArmType.YAM, gripper_type=GripperType.LINEAR_4310)
+        self.robot = get_yam_robot(
+            channel=channel,
+            arm_type=ArmType.YAM,
+            gripper_type=GripperType.LINEAR_4310,
+            limit_gripper_force=GRIPPER_FORCE,
+        )
         self.cmd = self.robot.get_joint_pos()
         self.q = READY.copy()
         position, wxyz = ik.tcp_pose(self.q)

@@ -154,6 +154,7 @@ def get_yam_robot(
     set_realtime_and_pin_callback: Optional[Callable[[int], None]] = None,
     enable_auto_recovery: bool = False,
     use_coulomb_friction: bool = False,
+    limit_gripper_force: float = 50.0,
 ) -> "Robot":
     """Create a YAM-family robot (real or sim).
 
@@ -176,6 +177,8 @@ def get_yam_robot(
         use_coulomb_friction: If True, add the per-joint Coulomb friction feedforward (from the arm
             config) during gravity compensation. Defaults to False. Only affects real hardware; ignored
             in sim mode (SimRobot has no friction feedforward).
+        limit_gripper_force: Force (N) the gripper holds once it closes on something. -1 disables the
+            limiter. Only affects real hardware.
     """
     # --- Gripper-only path (no arm) -------------------------------------------
     if arm_type == ArmType.NO_ARM:
@@ -315,6 +318,6 @@ def get_yam_robot(
             enable_gripper_calibration=gripper_needs_cal,
             gripper_type=gripper_type,
             arm_type=arm_type,
-            limit_gripper_force=50.0,
+            limit_gripper_force=limit_gripper_force,
         )
     return get_robot()
