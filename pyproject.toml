@@ -48,6 +48,8 @@ dev = [
 # Pinned to the revisions the reference teleop rig runs, so a resolve cannot silently
 # move the solver under a tuned set of IK weights.
 pyroki = { git = "https://github.com/chungmin99/pyroki.git", rev = "388e43e1fc0d0ee382968d3dd72970fd62a0450c" }
+# The 1.0.6 GStreamer build, not yet on PyPI.
+adamo = { path = "target/wheels/gstreamer/adamo-1.0.6-cp38-abi3-manylinux_2_38_x86_64.whl" }
 jaxls = { git = "https://github.com/brentyi/jaxls.git", rev = "50a58be88c5ef74532f09e3f55268b4f02c490e3" }
 
 [tool.uv]
@@ -136,7 +138,7 @@ dev = [
 # packages live on git rather than PyPI (PyPI's `jaxls` is an unrelated 2024 package
 # that will not import against modern jax).
 teleop = [
-    "adamo>=0.4.59",
+    "adamo>=1.0.6",
     "jax>=0.6",
     "jax-dataclasses>=1.6",
     "jaxlie>=1.5",
