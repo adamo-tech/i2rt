@@ -11,6 +11,11 @@ The operator's view is the rig's two USB cameras, composited side by side into o
 native VA-API encoder compresses it. Frames stay in the Rust runtime, so no frame crosses
 into Python.
 
+While an operator is in control, the Adamo data service records the stereo track along with
+each arm's measured joints (``{side}/joint_pos``) and the joints it is commanded to
+(``{side}/joint_cmd``, the action), seven values each with the gripper last. Recordings
+show up on the Recordings page at app.adamohq.com; --no-record turns this off.
+
     export ADAMO_API_KEY=ak_...
     uv run examples/adamo_teleop/adamo_teleop.py --arm-left can1 --arm-right can0 \
         --eye-left /dev/video6 --eye-right /dev/video4
@@ -44,6 +49,8 @@ class Args:
     # Composited into one stereo track. Each camera has a pair of nodes; only the even one captures.
     eye_left: str = "/dev/video6"
     eye_right: str = "/dev/video4"
+    # Record the video and joint topics while an operator is in control.
+    record: bool = True
 
 
 NAME = "yam-san-mateo"
@@ -132,8 +139,13 @@ ik: YamIK
 class Arm:
     """One robot, the hand it follows, and where its end-effector is being asked to go."""
 
-    def __init__(self, channel: str, side: str, cleanup: ExitStack) -> None:
+    def __init__(self, channel: str, side: str, session: object, cleanup: ExitStack) -> None:
         self.side = side
+        # Measured and commanded joints, the state and action a recording files next to each frame.
+        self.pos_pub = session.publisher(f"{NAME}/{side}/joint_pos", reliable=True)
+        self.cmd_pub = session.publisher(f"{NAME}/{side}/joint_cmd", reliable=True)
+        cleanup.callback(self.pos_pub.close)
+        cleanup.callback(self.cmd_pub.close)
         self.robot = get_yam_robot(
             channel=channel,
             arm_type=ArmType.YAM,
@@ -186,6 +198,11 @@ class Arm:
         if grip is not None:
             self.cmd[6] = grip
         self.robot.command_joint_pos(self.cmd)
+        self.publish()
+
+    def publish(self) -> None:
+        self.pos_pub.put(json.dumps(self.robot.get_joint_pos().tolist()).encode())
+        self.cmd_pub.put(json.dumps(self.cmd.tolist()).encode())
 
 
 class RuntimeThread(threading.Thread):
@@ -263,7 +280,18 @@ def main(args: Args) -> None:
     # The network is registered first so ExitStack closes both arms before it, even when a
     # close raises.
     with ExitStack() as cleanup:
-        adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME)
+        # Continuous rather than Episodes: Episodes keeps only time inside a task started from
+        # the web app, and an operator here just takes the controls.
+        recording = (
+            adamo.Recording(
+                adamo.ControllerMask.HUMAN,
+                mode=adamo.RecordingMode.Continuous(frame_rate=FPS),
+                topics=[f"{side}/{topic}" for _, side in arm_configs for topic in ("joint_pos", "joint_cmd")],
+            )
+            if args.record
+            else False
+        )
+        adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME, record=recording)
         cleanup.callback(adamo_robot.close)
         # backend="hw_pipeline" keeps GStreamer for capture and hands encoding to Adamo's
         # native VA-API encoder, avoiding the one-frame decode delay headsets add to vah264enc.
@@ -288,7 +316,7 @@ def main(args: Args) -> None:
         arms = []
         for channel, side in arm_configs:
             runtime.check()
-            arms.append(Arm(channel, side, cleanup))
+            arms.append(Arm(channel, side, adamo_robot.session, cleanup))
         check_health(arms, runtime)
         print(f"[teleop] {NAME}: grip to move an arm, trigger for its gripper", flush=True)
 
@@ -299,6 +327,7 @@ def main(args: Args) -> None:
             for arm, q0 in zip(arms, starts, strict=True):
                 arm.cmd[:6] = q0 + (READY - q0) * (i / 200)
                 arm.robot.command_joint_pos(arm.cmd)
+                arm.publish()
             time.sleep(DT)
 
         deadline = time.perf_counter()
