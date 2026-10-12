@@ -136,7 +136,8 @@ dev = [
 # packages live on git rather than PyPI (PyPI's `jaxls` is an unrelated 2024 package
 # that will not import against modern jax).
 teleop = [
-    "adamo>=0.4.59",
+    # PyPI wheels from 1.0.8 include GStreamer capture and recording.
+    "adamo>=1.0.8",
     "jax>=0.6",
     "jax-dataclasses>=1.6",
     "jaxlie>=1.5",

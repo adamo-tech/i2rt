@@ -1,30 +1,33 @@
 """Drive two YAM arms in task space from a pair of VR controllers, over Adamo.
 
-Each arm ramps to a ready pose, then follows one hand: can0 the left controller,
-can1 the right. A controller's grip is a clutch -- hold it to pin the hand to where
+Each arm ramps to a ready pose, then follows one hand: --arm-left the left controller,
+--arm-right the right. A controller's grip is a clutch -- hold it to pin the hand to where
 that arm's end-effector already is and move the arm one-for-one from there, release
 to freeze. The trigger closes that arm's gripper, and Y (B on the right controller)
 walks that arm back to the pose it started in.
 
 The operator's view is the rig's two USB cameras, composited side by side into one
-``stereo=True`` track. The whole capture -> decode -> composite -> encode graph runs
-in the Rust runtime, so no frame crosses into Python.
+``stereo=True`` track. GStreamer captures and composites, Adamo's native VA-API encoder
+compresses, and no frame crosses into Python.
+
+While an operator is in control, Adamo records the video with each arm's measured
+(``{side}/joint_pos``) and commanded (``{side}/joint_cmd``) joints; --no-record turns it off.
 
     export ADAMO_API_KEY=ak_...
     uv run examples/adamo_teleop/adamo_teleop.py --arm-left can1 --arm-right can0 \
-        --left-eye /dev/video6 --right-eye /dev/video4
+        --eye-left /dev/video6 --eye-right /dev/video4
 """
 
+import json
 import os
 import threading
-import time
 from dataclasses import dataclass
 
 import adamo
 import jaxlie
 import numpy as np
 import tyro
-from adamo.xr import PoseStamped, XRJoy, subscribe_xr_control
+from adamo.xr import Joy, PoseStamped, XrController, XrFrame, subscribe_xr_control
 from yam_ik import VELOCITY_LIMITS, YamIK
 
 from i2rt.robots.get_robot import get_yam_robot
@@ -33,13 +36,14 @@ from i2rt.robots.utils import ArmType, GripperType
 
 @dataclass
 class Args:
-    """Name one arm to run it alone; name neither to run both, left on can1 and right on can0."""
+    """Name the CAN interface of each arm to run: --arm-left, --arm-right, or both."""
 
     arm_left: str | None = None
     arm_right: str | None = None
     # Composited into one stereo track. Each camera has a pair of nodes; only the even one captures.
     eye_left: str = "/dev/video6"
     eye_right: str = "/dev/video4"
+    record: bool = True
 
 
 args = tyro.cli(Args)
@@ -60,7 +64,7 @@ TRACK = "zed"
 # 4096-pixel width an H.264 encoder (and a headset decoder) will take, so this is
 # 3840 wide on the wire.
 EYE_WIDTH, EYE_HEIGHT, FPS = 1920, 1080, 30
-BITRATE_KBPS = 4000
+BITRATE_KBPS = 8000
 
 # WebXR local-floor (+x right, +y up, -z forward) -> arm world (+x forward, +y left, +z up).
 XR2W = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -80,23 +84,32 @@ def quat_to_mat(q: object) -> np.ndarray:
     )
 
 
-def on_sample(sample: object) -> None:
-    parts = sample.topic.strip("/").split("/")
-    if len(parts) < 2 or parts[0] != "controller" or parts[1] not in state:
-        return
-    msg, side = sample.message, state[parts[1]]
+def on_xr(sample: object) -> None:
+    # The headset sends either one XrFrame on json/xr/frame, or one message per device on
+    # json/xr/{left,right}/{pose,joy}; both reduce to (side, pose, joy) updates.
+    msg = sample.message
+    if isinstance(msg, XrFrame):
+        updates = [(side, c.pose, c) for side in state if (c := getattr(msg, side)) is not None]
+    else:
+        side, kind = sample.channel.split("/")[-2:]
+        updates = [(side, msg if kind == "pose" and isinstance(msg, PoseStamped) else None, msg)]
     with lock:
-        if len(parts) == 2 and isinstance(msg, PoseStamped):
-            side["pos"] = XR2W @ np.array([msg.position.x, msg.position.y, msg.position.z])
-            side["rot"] = XR2W @ quat_to_mat(msg.orientation) @ XR2W.T
-        elif len(parts) == 3 and parts[2] == "joy" and isinstance(msg, XRJoy):
-            side["clutch"] = len(msg.buttons) > 1 and bool(msg.buttons[1])
+        for name, pose, joy in updates:
+            if name not in state:
+                continue
+            side = state[name]
+            if pose is not None:
+                side["pos"] = XR2W @ np.array([pose.position.x, pose.position.y, pose.position.z])
+                side["rot"] = XR2W @ quat_to_mat(pose.orientation) @ XR2W.T
+            if not isinstance(joy, (Joy, XrController)):
+                continue
+            side["clutch"] = len(joy.buttons) > 1 and bool(joy.buttons[1])
             # Y on the left controller, B on the right: the same index in the Touch mapping.
-            side["home"] = len(msg.buttons) > 5 and bool(msg.buttons[5])
+            side["home"] = len(joy.buttons) > 5 and bool(joy.buttons[5])
             trigger = (
-                float(msg.axes[4])
-                if len(msg.axes) > 4 and msg.axes[4] > 0
-                else float(bool(msg.buttons and msg.buttons[0]))
+                float(joy.axes[4])
+                if len(joy.axes) > 4 and joy.axes[4] > 0
+                else float(bool(joy.buttons and joy.buttons[0]))
             )
             if trigger > 0.05:  # a released trigger leaves the gripper where it was
                 side["grip"] = 1.0 - trigger
@@ -134,6 +147,9 @@ class Arm:
 
     def __init__(self, channel: str, side: str) -> None:
         self.side = side
+        # The state and action a recording files next to each frame.
+        self.pos_pub = adamo_robot.session.publisher(f"{NAME}/{side}/joint_pos", reliable=True)
+        self.cmd_pub = adamo_robot.session.publisher(f"{NAME}/{side}/joint_cmd", reliable=True)
         self.robot = get_yam_robot(
             channel=channel,
             arm_type=ArmType.YAM,
@@ -185,42 +201,60 @@ class Arm:
         if grip is not None:
             self.cmd[6] = grip
         self.robot.command_joint_pos(self.cmd)
+        self.pos_pub.put(json.dumps(self.robot.get_joint_pos().tolist()).encode())
+        self.cmd_pub.put(json.dumps(self.cmd.tolist()).encode())
 
 
-arms = [Arm(channel, side) for channel, side in ARMS]
-adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME)
-# No width/height/pixel_format: a pipeline= track takes its size from the caps the graph
-# negotiates, and this graph has already decoded to raw NV12 itself.
-adamo_robot.attach_video(TRACK, pipeline=PIPELINE, fps=FPS, bitrate_kbps=BITRATE_KBPS, stereo=True)
-subscribe_xr_control(adamo_robot.session, NAME, on_sample, max_age_seconds=0.25)
-# Compile the solver before anything moves; the first solve takes seconds, every one after
-# it a few milliseconds.
+# Compile the solver before the motors are enabled: the first solve takes seconds (and can
+# starve the CAN threads), every one after it a few milliseconds.
 ik.solve(*ik.tcp_pose(READY), READY, DT)
+# Continuous rather than Episodes: Episodes keeps only time inside a task started from the
+# web app, and an operator here just takes the controls.
+recording = args.record and adamo.Recording(mode=adamo.RecordingMode.Continuous(frame_rate=adamo.FrameRate.Raw))
+adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME, record=recording)
+# backend="hw_pipeline" keeps GStreamer for capture but encodes with Adamo's native VA-API
+# encoder, avoiding the one-frame decode delay headsets add to vah264enc's output.
+adamo_robot.attach_video(
+    TRACK,
+    pipeline=PIPELINE,
+    encoder="vah264enc",
+    backend="hw_pipeline",
+    width=2 * EYE_WIDTH,
+    height=EYE_HEIGHT,
+    fps=FPS,
+    bitrate_kbps=BITRATE_KBPS,
+    rate_control="vbr",
+    adaptive_bitrate=False,
+    stereo=True,
+)
+subscribe_xr_control(adamo_robot, on_xr, max_age=0.25)
 # attach_video only queues the graph; run() is what starts the Rust pipeline, and it
 # blocks -- so it goes in a daemon thread and the control loop keeps the main one.
-threading.Thread(target=adamo_robot.run, daemon=True).start()
+video = threading.Thread(target=adamo_robot.run, daemon=True)
+video.start()
+arms = [Arm(channel, side) for channel, side in ARMS]
 print(f"[teleop] {NAME}: grip to move an arm, trigger for its gripper", flush=True)
 
 try:
     # Ramp to the ready pose: the home pose sits on joint2/joint3's lower bound.
     starts = [arm.cmd[:6].copy() for arm in arms]
+    rate = adamo.Rate(1 / DT)
     for i in range(1, 201):
         for arm, q0 in zip(arms, starts, strict=True):
             arm.cmd[:6] = q0 + (READY - q0) * (i / 200)
             arm.robot.command_joint_pos(arm.cmd)
-        time.sleep(DT)
+        rate.sleep()
 
-    deadline = time.perf_counter()
-    while True:
+    # Rate keeps a fixed schedule, so the milliseconds the solve costs don't stretch DT,
+    # which is what the IK's velocity clamp is scaled by.
+    while video.is_alive():  # an operator who can't see shouldn't be steering
         for arm in arms:
             arm.step()
-        # Sleep the remainder of the tick rather than a flat DT: the solve costs milliseconds,
-        # and DT is what the IK's velocity clamp is scaled by.
-        deadline += DT
-        time.sleep(max(deadline - time.perf_counter(), 0.0))
+        rate.sleep()
+    print("[teleop] video stopped", flush=True)
 except KeyboardInterrupt:
     print("\n[teleop] interrupted", flush=True)
 finally:
-    adamo_robot.close()
     for arm in arms:
         arm.robot.close()
+    adamo_robot.close()
