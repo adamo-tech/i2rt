@@ -210,11 +210,7 @@ class Arm:
 ik.solve(*ik.tcp_pose(READY), READY, DT)
 # Continuous rather than Episodes: Episodes keeps only time inside a task started from the
 # web app, and an operator here just takes the controls.
-recording = args.record and adamo.Recording(
-    adamo.ControllerMask.HUMAN,
-    mode=adamo.RecordingMode.Continuous(frame_rate=FPS),
-    topics=[f"{side}/{topic}" for _, side in ARMS for topic in ("joint_pos", "joint_cmd")],
-)
+recording = args.record and adamo.Recording(mode=adamo.RecordingMode.Continuous(frame_rate=adamo.FrameRate.Raw))
 adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME, record=recording)
 # backend="hw_pipeline" keeps GStreamer for capture but encodes with Adamo's native VA-API
 # encoder, avoiding the one-frame decode delay headsets add to vah264enc's output.
