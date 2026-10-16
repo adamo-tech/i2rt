@@ -1,0 +1,25 @@
+[Unit]
+Description=YAM teleop with ZED 1080p GStreamer capture and VA-API video
+Wants=network-online.target
+Requires=sys-subsystem-net-devices-can_left.device sys-subsystem-net-devices-can_right.device
+After=network-online.target sys-subsystem-net-devices-can_left.device sys-subsystem-net-devices-can_right.device
+
+[Service]
+Type=simple
+User=anvil
+SupplementaryGroups=render video
+WorkingDirectory=/home/anvil/i2rt
+EnvironmentFile=/home/anvil/adamo.env
+Environment=PYTHONUNBUFFERED=1
+Environment=RUST_LOG=info
+ExecStartPre=/usr/bin/test -r /dev/v4l/by-id/usb-Technologies__Inc._ZED-M-video-index0
+ExecStartPre=/usr/bin/test -w /dev/v4l/by-id/usb-Technologies__Inc._ZED-M-video-index0
+ExecStart=/home/anvil/.local/bin/uv run --no-sync examples/adamo_teleop/adamo_teleop.py --arm-right can_right --arm-left can_left --zed /dev/v4l/by-id/usb-Technologies__Inc._ZED-M-video-index0 --wrist-left /dev/v4l/by-path/pci-0000:05:00.0-usb-0:1.1:1.0-video-index0 --wrist-right /dev/v4l/by-path/pci-0000:06:00.0-usb-0:1:1.0-video-index0
+KillSignal=SIGINT
+TimeoutStopSec=20
+# A restart initializes and moves the arms back to their ready pose.
+# Require an operator to restart after a failure instead of retrying unattended.
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
