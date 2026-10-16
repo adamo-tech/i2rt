@@ -6,16 +6,16 @@ that arm's end-effector already is and move the arm one-for-one from there, rele
 to freeze. The trigger closes that arm's gripper, and Y (B on the right controller)
 walks that arm back to the pose it started in.
 
-The operator's view is the rig's two USB cameras, composited side by side into one
-``stereo=True`` track. GStreamer captures and composites, Adamo's native VA-API encoder
-compresses, and no frame crosses into Python.
+The operator's view is a ZED Mini, read as a plain UVC camera: it delivers both eyes
+side by side in one frame, which goes out as one ``stereo=True`` track. GStreamer captures,
+Adamo's native VA-API encoder compresses, no frame crosses into Python, and no ZED SDK is
+needed.
 
-While an operator is in control, Adamo records the video with each arm's measured
+While an operator runs a task from the web app, Adamo records the video with each arm's measured
 (``{side}/joint_pos``) and commanded (``{side}/joint_cmd``) joints; --no-record turns it off.
 
     export ADAMO_API_KEY=ak_...
-    uv run examples/adamo_teleop/adamo_teleop.py --arm-left can1 --arm-right can0 \
-        --eye-left /dev/video6 --eye-right /dev/video4
+    uv run examples/adamo_teleop/adamo_teleop.py --arm-left can1 --arm-right can0 --zed /dev/video2
 """
 
 import json
@@ -40,15 +40,17 @@ class Args:
 
     arm_left: str | None = None
     arm_right: str | None = None
-    # Composited into one stereo track. Each camera has a pair of nodes; only the even one captures.
-    eye_left: str = "/dev/video6"
-    eye_right: str = "/dev/video4"
+    # The ZED Mini's capture node; the odd node after it is metadata only.
+    zed: str = "/dev/video2"
+    wrist_left: str | None = None
+    wrist_right: str | None = None
     record: bool = True
 
 
 args = tyro.cli(Args)
-NAME = "yam-san-mateo"
+NAME = "yam-london"
 ARMS = [(ch, side) for ch, side in ((args.arm_left, "left"), (args.arm_right, "right")) if ch]
+WRIST_CAMERAS = [(device, side) for device, side in ((args.wrist_left, "left"), (args.wrist_right, "right")) if device]
 # Where the arms settle when unpowered, read off both arms and averaged, so cutting
 # power from the ready pose doesn't drop them.
 READY = np.array([0.0, 0.58, 0.57, -0.11, 0.07, 0.0])
@@ -60,11 +62,15 @@ HOME_SPEED = VELOCITY_LIMITS / 6.0
 GRIPPER_FORCE = 1.0
 
 TRACK = "zed"
-# 1080p per eye, a mode both cameras offer. The composite is what has to fit the
-# 4096-pixel width an H.264 encoder (and a headset decoder) will take, so this is
-# 3840 wide on the wire.
-EYE_WIDTH, EYE_HEIGHT, FPS = 1920, 1080, 30
+# The ZED Mini's 1080p mode: 1920x1080 per eye, 3840x1080 side by side, left eye on the
+# left. Its only larger mode (2208x1242 per eye, 4416 wide, 15 fps) is past the 4096-pixel
+# width an H.264 encoder (and a headset decoder) will take. The camera sends raw YUYV only,
+# ~250 MB/s at this mode, so it has to sit on a USB 3 port. GStreamer drops corrupt USB
+# buffers and repeats intact frames across gaps, so 30 FPS out is not 30 fresh frames.
+WIDTH, HEIGHT, FPS = 3840, 1080, 30
 BITRATE_KBPS = 8000
+WRIST_WIDTH, WRIST_HEIGHT = 1280, 720
+WRIST_BITRATE_KBPS = 2000
 
 # WebXR local-floor (+x right, +y up, -z forward) -> arm world (+x forward, +y left, +z up).
 XR2W = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -115,28 +121,17 @@ def on_xr(sample: object) -> None:
                 side["grip"] = 1.0 - trigger
 
 
-def eye_branch(device: str, sink: str) -> str:
-    """One camera, decoded and converted, into one compositor pad. The queue is one deep
-    and leaky, so an eye that stalls drops its own frames rather than holding the other."""
-    return (
-        f"v4l2src device={device} do-timestamp=true"
-        f" ! image/jpeg,width={EYE_WIDTH},height={EYE_HEIGHT},framerate={FPS}/1 ! jpegdec"
-        " ! videoconvert ! video/x-raw,format=NV12"
-        " ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
-        f" ! {sink}"
-    )
-
-
-# The composite's caps are a named, quoted capsfilter: the parser reads a trailing bare
-# caps greedily and would run straight past the space into the next chain.
-PIPELINE = "  ".join(
-    (
-        f"compositor name=sbs background=black sink_0::xpos=0 sink_1::xpos={EYE_WIDTH}"
-        f' ! capsfilter caps="video/x-raw,format=NV12,width={2 * EYE_WIDTH},'
-        f'height={EYE_HEIGHT},framerate={FPS}/1"',
-        eye_branch(args.eye_left, "sbs.sink_0"),
-        eye_branch(args.eye_right, "sbs.sink_1"),
-    )
+# Filter corruption before conversion: v4l2src can emit full-sized buffers marked corrupted
+# even when only part of the USB frame arrived. The pipeline ends in raw NV12; Adamo adds
+# the encoder.
+PIPELINE = (
+    f"v4l2src device={args.zed} io-mode=mmap"
+    f' ! capsfilter caps="video/x-raw,format=YUY2,width={WIDTH},height={HEIGHT},framerate={FPS}/1"'
+    " ! identity drop-buffer-flags=corrupted"
+    " ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream"
+    " ! videoconvert n-threads=2"
+    " ! videorate"
+    f' ! capsfilter caps="video/x-raw,format=NV12,framerate={FPS}/1"'
 )
 
 ik = YamIK()
@@ -208,9 +203,8 @@ class Arm:
 # Compile the solver before the motors are enabled: the first solve takes seconds (and can
 # starve the CAN threads), every one after it a few milliseconds.
 ik.solve(*ik.tcp_pose(READY), READY, DT)
-# Continuous rather than Episodes: Episodes keeps only time inside a task started from the
-# web app, and an operator here just takes the controls.
-recording = args.record and adamo.Recording(mode=adamo.RecordingMode.Continuous(frame_rate=adamo.FrameRate.Raw))
+# Episodes keeps only the time inside a task started from the web app, one file per task.
+recording = args.record and adamo.Recording(mode=adamo.RecordingMode.Episodes(frame_rate=FPS), topics=[f"{side}/{topic}" for _, side in ARMS for topic in ("joint_pos", "joint_cmd")])
 adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME, record=recording)
 # backend="hw_pipeline" keeps GStreamer for capture but encodes with Adamo's native VA-API
 # encoder, avoiding the one-frame decode delay headsets add to vah264enc's output.
@@ -219,14 +213,16 @@ adamo_robot.attach_video(
     pipeline=PIPELINE,
     encoder="vah264enc",
     backend="hw_pipeline",
-    width=2 * EYE_WIDTH,
-    height=EYE_HEIGHT,
+    width=WIDTH,
+    height=HEIGHT,
     fps=FPS,
     bitrate_kbps=BITRATE_KBPS,
     rate_control="vbr",
     adaptive_bitrate=False,
     stereo=True,
 )
+for device, side in WRIST_CAMERAS:
+    adamo_robot.attach_video(f"wrist_{side}", pipeline=f'v4l2src device={device} ! capsfilter caps="image/jpeg,width={WRIST_WIDTH},height={WRIST_HEIGHT},framerate={FPS}/1" ! jpegdec ! videoconvert ! capsfilter caps="video/x-raw,format=NV12"', encoder="vah264enc", backend="hw_pipeline", width=WRIST_WIDTH, height=WRIST_HEIGHT, fps=FPS, bitrate_kbps=WRIST_BITRATE_KBPS, rate_control="vbr", adaptive_bitrate=False)
 subscribe_xr_control(adamo_robot, on_xr, max_age=0.25)
 # attach_video only queues the graph; run() is what starts the Rust pipeline, and it
 # blocks -- so it goes in a daemon thread and the control loop keeps the main one.
