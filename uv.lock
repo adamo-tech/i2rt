@@ -23,12 +23,15 @@ wheels = [
 
 [[package]]
 name = "adamo"
-version = "1.0.10"
+version = "1.0.17"
 source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/3d/b3d9f9c82723b130befd7be8290baeb698fe2e64b57194bb442bf15c0822/adamo-1.0.10-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:b46d9e3693a57e846deb6acb46a47709f5da0a2ad61751aa93b25fbc1194d28d", size = 12253458, upload-time = "2026-10-16T17:13:34.657Z" },
-    { url = "https://files.pythonhosted.org/packages/75/1d/61e69fddf9d1cc29c284a7a86511675736d1f4b57dfe8359683dbd23f3dd/adamo-1.0.10-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:4e9d9f116fde9829d1629c274b963662ac8fb4b4beb7623650ef726d09e01aa5", size = 21992213, upload-time = "2026-10-16T17:13:37.501Z" },
-    { url = "https://files.pythonhosted.org/packages/eb/9d/8e7334ec5ca827d73dce2212bc21763d1ba99a7122c3c380fe33a3fc1bcc/adamo-1.0.10-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:caa87770de0fcbcb2dce40979fdfad7946dc7e05e0258967793403e55b49ff7a", size = 21998928, upload-time = "2026-10-16T17:13:40.182Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/80/c3e7e6fbc1b8a864eec1010b6259d77dcb2dff83ace147b452213a99424f/adamo-1.0.17-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:031c05dff4b4aa1d7b4d71883bef69b2a13b15042fc5a57a85d5914bd9d5123a", size = 12466106, upload-time = "2026-10-27T17:00:52.017Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/c4/3aa31afd5842f86b056bfe2243c4e2a08ed119673372ba14db543bae17cc/adamo-1.0.17-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:c7a696a31b958975257971cc70e5f55b4778bd434bf9da6f359c6dacfd711b19", size = 22817248, upload-time = "2026-10-27T17:00:54.099Z" },
+    { url = "https://files.pythonhosted.org/packages/24/f6/2ba116820a506ec59d881197cb08dd4d9b14971232d79f3fc7a0167366ed/adamo-1.0.17-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f0a26bce05d3a9aa01a0617535388ffef1306d011ffdbe4911a7a429336d5702", size = 22749071, upload-time = "2026-10-27T17:00:56.253Z" },
 ]
 
 [[package]]
@@ -734,7 +737,7 @@ dev = [
     { name = "ruff", specifier = ">=0.15.6" },
 ]
 teleop = [
-    { name = "adamo", specifier = ">=1.0.10" },
+    { name = "adamo", specifier = ">=1.0.17" },
     { name = "jax", specifier = ">=0.6" },
     { name = "jax-dataclasses", specifier = ">=1.6" },
     { name = "jaxlie", specifier = ">=1.5" },
