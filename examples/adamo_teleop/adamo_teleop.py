@@ -211,7 +211,7 @@ ik.solve(*ik.tcp_pose(READY), READY, DT)
 # Continuous rather than Episodes: Episodes keeps only time inside a task started from the
 # web app, and an operator here just takes the controls.
 recording = args.record and adamo.Recording(mode=adamo.RecordingMode.Continuous(frame_rate=adamo.FrameRate.Raw()))
-adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME, record=recording)
+adamo_robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name=NAME, record=recording, experimental=True)
 # backend="hw_pipeline" keeps GStreamer for capture but encodes with Adamo's native VA-API
 # encoder, avoiding the one-frame decode delay headsets add to vah264enc's output.
 adamo_robot.attach_video(
@@ -224,7 +224,7 @@ adamo_robot.attach_video(
     fps=FPS,
     bitrate_kbps=BITRATE_KBPS,
     rate_control="vbr",
-    adaptive_bitrate=False,
+    adaptive_bitrate=True,
     stereo=True,
 )
 subscribe_xr_control(adamo_robot, on_xr, max_age=0.25)
