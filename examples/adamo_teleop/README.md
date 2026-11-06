@@ -21,44 +21,6 @@ Use 720p per eye when fresh-frame consistency matters more than resolution.
 on the NVIDIA/CUDA-based ZED SDK. The installed `v4l2src`, `identity`, `queue`,
 `videoconvert`, `videorate`, and `capsfilter` elements are sufficient.
 
-## Service on the London host
-
-`yam-teleop.service` runs as `anvil` from `/home/anvil/i2rt`, using the existing
-uv environment without synchronizing or upgrading dependencies at startup.
-The API key is read from `/home/anvil/adamo.env` (mode 0600), which contains
-`ADAMO_API_KEY=...`. Never put the key in this repository or the unit file.
-The stable ZED capture path survives `/dev/videoN` renumbering.
-Both `can_left` and `can_right` must be configured and up at 1 Mbit/s.
-
-Starting the service initializes both arms and ramps them to the ready pose.
-Clear the workspace before starting it. Enabling the service also starts this
-sequence on subsequent boots. Automatic crash restarts are disabled because
-restarting would move the arms again; diagnose the failure before restarting.
-
-From the repository root, after installing the project dependencies:
-
-```sh
-sudo install -m 0644 examples/adamo_teleop/yam-teleop.service /etc/systemd/system/yam-teleop.service
-sudo systemctl daemon-reload
-sudo systemctl enable yam-teleop.service
-sudo systemctl start yam-teleop.service
-```
-
-Check or stop it with:
-
-```sh
-systemctl status yam-teleop.service --no-pager
-journalctl -u yam-teleop.service -f
-sudo systemctl stop yam-teleop.service
-```
-
-Stop the service before running the example manually or accessing the camera
-with another program. Service shutdown sends SIGINT so the example closes the
-Adamo session and arm connections. Edit the user, absolute paths, CAN names,
-and camera path in the unit when installing on another host. After changing
-the unit, reinstall it and run `systemctl daemon-reload`; restart only when the
-arm workspace is clear.
-
 ## Startup and fault handling
 
 The example compiles the IK solver before opening either arm. Cold JAX
@@ -71,9 +33,3 @@ and the Adamo runtime during the ready-pose ramp and every teleop tick. A
 thread failure ends the service. Arm connections close before the network
 session, and cleanup continues if an individual close raises. Automatic
 restarts remain disabled.
-
-Run the hardware-free regression checks with:
-
-```sh
-uv run --no-sync pytest examples/adamo_teleop/test_startup.py -q
-```

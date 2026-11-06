@@ -62,7 +62,6 @@ Drive both arms from a pair of VR controllers over Adamo, with a ZED Mini stream
 headset. `uv run` installs the teleop dependencies on first launch:
 
 ```bash
-export ADAMO_API_KEY=<secret_key> # you can get the api key at https://operate.adamohq.com/#/settings
 uv run examples/adamo_teleop/adamo_teleop.py --arm-right can_right --arm-left can_left --zed /dev/video2
 ```
 

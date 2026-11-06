@@ -136,8 +136,8 @@ dev = [
 # packages live on git rather than PyPI (PyPI's `jaxls` is an unrelated 2024 package
 # that will not import against modern jax).
 teleop = [
-    # Recording frame-rate constructors require the 1.0.10 API.
-    "adamo>=1.0.10",
+    # 1.0.18+: pairing-key connections, FrameRate constructors, per-track keyframe distance.
+    "adamo>=1.0.19",
     "jax>=0.6",
     "jax-dataclasses>=1.6",
     "jaxlie>=1.5",

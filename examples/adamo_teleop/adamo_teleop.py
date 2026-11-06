@@ -11,11 +11,10 @@ side by side in one frame, which goes out as one ``stereo=True`` track. GStreame
 Adamo's native VA-API encoder compresses, no frame crosses into Python, and no ZED SDK is
 needed.
 
-While an operator runs a task from the web app, Adamo records the video with each arm's measured
+While an operator is in control, Adamo records the video with each arm's measured
 (``{side}/joint_pos``) and commanded (``{side}/joint_cmd``) joints; --no-record turns it off.
 
-    export ADAMO_API_KEY=ak_...
-    uv run examples/adamo_teleop/adamo_teleop.py --arm-left can1 --arm-right can0 --zed /dev/video2
+    uv run examples/adamo_teleop/adamo_teleop.py --arm-left can_left --arm-right can_right --zed /dev/video2
 """
 
 import threading
@@ -30,6 +29,10 @@ from yam_ik import YamIK
 
 args = tyro.cli(Args)
 ARMS = arm_channels(args)
+# Meters a tracked target may sit from where the end-effector actually is. Further than this
+# is a jump -- the controller left the headset's view, or tracking glitched -- and the arm holds
+# still until the hand comes back within range, rather than lunging after it.
+JUMP_LIMIT = 0.10
 
 # WebXR local-floor (+x right, +y up, -z forward) -> arm world (+x forward, +y left, +z up).
 XR2W = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -93,6 +96,7 @@ class TeleopArm(Arm):
         self.target, self.rot = position, np.asarray(jaxlie.SO3(wxyz).as_matrix())
         self.anchor = None
         self.homing = False
+        self.jumped = False
 
     def step(self) -> None:
         with lock:
@@ -105,19 +109,40 @@ class TeleopArm(Arm):
 
         if tracking:
             self.homing = False
+            # Where the end-effector is now, from the configuration last commanded: the anchor
+            # pins the hand here, and the jump check measures the target from here.
+            here, here_wxyz = ik.tcp_pose(self.q)
             if self.anchor is None:
+                self.target, self.rot = here, np.asarray(jaxlie.SO3(here_wxyz).as_matrix())
                 self.anchor = (hand, hand_rot, self.target, self.rot)
                 print(f"[teleop] {self.side} grip held, tracking from {np.round(self.target, 4)}", flush=True)
             hand0, hand_rot0, ee0, ee_rot0 = self.anchor
-            self.target, self.rot = ee0 + (hand - hand0), hand_rot @ hand_rot0.T @ ee_rot0
-            # The solve is warm-started from the last configuration and rate-limited inside, so an
-            # unreachable target degrades into a lagging arm rather than a jump, and recovers.
-            wxyz = np.asarray(jaxlie.SO3.from_matrix(self.rot).wxyz)
-            self.q, _, _ = ik.solve(self.target, wxyz, self.q, CONTROL_PERIOD)
-            self.command[:6] = self.q
+            target, rot = ee0 + (hand - hand0), hand_rot @ hand_rot0.T @ ee_rot0
+            gap = float(np.linalg.norm(target - here))
+            if gap > JUMP_LIMIT:
+                # Hold the last accepted target and configuration; the anchor is kept, so the
+                # mapping is unchanged once the hand is back and the arm picks up where it was.
+                if not self.jumped:
+                    self.jumped = True
+                    print(
+                        f"[teleop] {self.side} target jumped {gap:.2f} m away, holding until it is"
+                        f" within {JUMP_LIMIT:.2f} m",
+                        flush=True,
+                    )
+            else:
+                if self.jumped:
+                    self.jumped = False
+                    print(f"[teleop] {self.side} target back within {JUMP_LIMIT:.2f} m, tracking", flush=True)
+                self.target, self.rot = target, rot
+                # The solve is warm-started from the last configuration and rate-limited inside, so
+                # an unreachable target degrades into a lagging arm rather than a jump, and recovers.
+                wxyz = np.asarray(jaxlie.SO3.from_matrix(self.rot).wxyz)
+                self.q, _, _ = ik.solve(self.target, wxyz, self.q, CONTROL_PERIOD)
+                self.command[:6] = self.q
         else:
             if self.anchor is not None:
                 self.anchor = None
+                self.jumped = False
                 print(f"[teleop] {self.side} grip released, holding {np.round(self.target, 4)}", flush=True)
             if self.homing:
                 # Joint space, at HOME_SPEED. The target is carried along so a re-clutch
