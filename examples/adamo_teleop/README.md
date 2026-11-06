@@ -1,25 +1,18 @@
-# YAM teleop with ZED stereo video
+# YAM teleop with stereo and wrist video
 
-The ZED captures 1920x1080 per eye as one 3840x1080 YUYV frame. The
-GStreamer pipeline filters corrupt buffers, bounds the raw queue to two frames,
-converts YUY2 to NV12, and uses `videorate` to repeat intact frames over capture
-gaps at a nominal 30 FPS. Adamo's native Intel VA-API backend encodes H.264 with
-an 8000 kbit/s VBR target with network bitrate adaptation disabled. Simple
-scenes may use fewer bits; CBR padding is not enabled. The installed SDK
-uses a half-second coded-bit reservoir for keyframe quality, without
-queuing raw frames. No image buffers cross into Python.
+The operator's view is two USB cameras, one per eye, each streamed as its own
+track (`zed_left` / `zed_right`, marked `stereo_left` / `stereo_right`); the
+headset pairs them by capture time into one stereo view. Each eye captures
+2048x1536 MJPEG at 30 fps, which GStreamer decodes on the GPU (`vajpegdec`,
+`vapostproc`) into VA memory for Adamo's native VA-API encoder, at a 4000 kbit/s
+VBR target with adaptive bitrate. No image buffers cross into Python.
 
-The camera's USB corruption is still present at this resolution. Output FPS
-includes repeats, not newly captured motion: a 20-second diagnostic captured
-593 buffers, rejected 61 flagged corrupt, and produced 598 output frames with
-67 repeats (including startup timing adjustment). `videorate` fills gaps when
-another frame arrives, so it does not guarantee uninterrupted wall-clock pacing
-during a camera stall. This avoids restarting capture on each bad USB frame.
-Use 720p per eye when fresh-frame consistency matters more than resolution.
+Each arm that runs also streams its wrist-mounted RealSense D405's color image
+(`wrist_left` / `wrist_right`) as 1280x720 YUYV, converted to NV12 on the CPU,
+at 2000 kbit/s.
 
-`zedsrc` is not used: this host has Intel graphics, while that plugin depends
-on the NVIDIA/CUDA-based ZED SDK. The installed `v4l2src`, `identity`, `queue`,
-`videoconvert`, `videorate`, and `capsfilter` elements are sufficient.
+Every track uses a 10-second keyframe distance: the VA-API encoder has no intra
+refresh, and at the 2-second default each IDR frame spiked latency past 300 ms.
 
 ## Startup and fault handling
 

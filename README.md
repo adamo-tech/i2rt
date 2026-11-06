@@ -58,15 +58,17 @@ uv run  examples/task_space_square/task_space_square.py --arm-left can1 --arm-ri
 
 ## Teleop
 
-Drive both arms from a pair of VR controllers over Adamo, with a ZED Mini streaming stereo video to the
-headset. `uv run` installs the teleop dependencies on first launch:
+Drive both arms from a pair of VR controllers over Adamo, with two USB cameras streaming stereo video to
+the headset and each arm's RealSense D405 streaming its wrist view. `uv run` installs the teleop
+dependencies on first launch:
 
 ```bash
-uv run examples/adamo_teleop/adamo_teleop.py --arm-right can_right --arm-left can_left --zed /dev/video2
+uv run examples/adamo_teleop/adamo_teleop.py --arm-right can_right --arm-left can_left \
+    --eye-left /dev/video14 --eye-right /dev/video6
 ```
 
-The ZED Mini shows up as two `/dev/video*` nodes; `--zed` takes the first (even-numbered) one, which is
-the one that captures. It needs a USB 3 port.
+Each eye camera shows up as two `/dev/video*` nodes; `--eye-left` / `--eye-right` take the even-numbered
+one, which is the one that captures. `--wrist-left` / `--wrist-right` default to the rig's D405 color nodes.
 
 ## YAM Arm
 

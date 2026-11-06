@@ -6,15 +6,18 @@ that arm's end-effector already is and move the arm one-for-one from there, rele
 to freeze. The trigger closes that arm's gripper, and Y (B on the right controller)
 walks that arm back to the pose it started in.
 
-The operator's view is a ZED Mini, read as a plain UVC camera: it delivers both eyes
-side by side in one frame, which goes out as one ``stereo=True`` track. GStreamer captures,
-Adamo's native VA-API encoder compresses, no frame crosses into Python, and no ZED SDK is
-needed.
+The operator's view is the rig's two USB cameras, each its own track: ``zed_left`` marked
+``stereo_left`` and ``zed_right`` marked ``stereo_right``, which the headset pairs by capture
+time into one stereo view. GStreamer only captures and decodes each eye's MJPEG on the GPU,
+Adamo's native VA-API encoder compresses it straight from GPU memory, and no frame crosses into
+Python. Each arm's wrist-mounted RealSense D405 streams its color image as its own track,
+``wrist_left`` / ``wrist_right``.
 
 While an operator is in control, Adamo records the video with each arm's measured
 (``{side}/joint_pos``) and commanded (``{side}/joint_cmd``) joints; --no-record turns it off.
 
-    uv run examples/adamo_teleop/adamo_teleop.py --arm-left can_left --arm-right can_right --zed /dev/video2
+    uv run examples/adamo_teleop/adamo_teleop.py --arm-left can_left --arm-right can_right \
+        --eye-left /dev/video14 --eye-right /dev/video6
 """
 
 import threading

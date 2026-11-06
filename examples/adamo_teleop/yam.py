@@ -14,9 +14,12 @@ from i2rt.robots.utils import ArmType, GripperType
 class Args:
     arm_left: str | None = None
     arm_right: str | None = None
-    zed: str = "/dev/video2"
-    wrist_left: str | None = None
-    wrist_right: str | None = None
+    # One stereo eye track each. Each camera has a pair of nodes; only the even one captures.
+    eye_left: str = "/dev/video14"
+    eye_right: str = "/dev/video6"
+    # Each D405's color node: the one of its six that offers YUYV. Streamed only for an arm that runs.
+    wrist_left: str = "/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_405_Intel_R__RealSense_TM__Depth_Camera_405_261923072392-video-index4"
+    wrist_right: str = "/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_405_Intel_R__RealSense_TM__Depth_Camera_405_261923072394-video-index4"
     record: bool = True
 
 
@@ -26,8 +29,19 @@ CONTROL_PERIOD = 0.02
 HOME_SPEED = VELOCITY_LIMITS / 6.0
 GRIPPER_FORCE = 1.0
 FRAME_RATE = 30
-ZED_WIDTH, ZED_HEIGHT, ZED_BITRATE_KBPS = 3840, 1080, 8000
+# The stereo pair's eye tracks. The SDK keeps them alike: both run at the lower of the two
+# eyes' bitrates and restart from keyframes together.
+EYE_TRACKS = (("zed_left", "stereo_left"), ("zed_right", "stereo_right"))
+# 2048x1536 per eye, the largest mode both cameras offer at 30 fps, and only as MJPEG: raw
+# YUYV manages 1 fps at this size. Per eye, half of what a side-by-side composite of both
+# eyes was given, so the pair costs the uplink what the single track did.
+EYE_WIDTH, EYE_HEIGHT, EYE_BITRATE_KBPS = 2048, 1536, 4000
+# The D405's largest color mode at 30 fps.
 WRIST_WIDTH, WRIST_HEIGHT, WRIST_BITRATE_KBPS = 1280, 720, 2000
+# Seconds between keyframes on every track. Each is a full IDR frame, around ten times a
+# normal one (the VA-API encoder has no intra refresh), and the frames behind it wait for it:
+# at the default 2 s that spiked latency past 300 ms every couple of seconds.
+KEYFRAME_DISTANCE = 10.0
 
 
 def arm_channels(args: Args) -> list[tuple[str, str]]:
@@ -41,6 +55,35 @@ def tailscale_ip() -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return next(iter(result.stdout.split()), None)
+
+
+def eye_pipeline(device: str) -> str:
+    """One camera's MJPEG, decoded and converted to NV12 without leaving VA memory, for
+    Adamo's native VA-API encoder to compress in place (backend="hw_pipeline").
+
+    GStreamer stays only for the GPU decode: Adamo's own device= capture decodes MJPEG on the
+    CPU. Software decode of both eyes (jpegdec / videoconvert) held 30 fps but cost ~1.5 of
+    this Pentium's 4 threads, which the control loop and the arms' CAN threads then fight
+    for; the VA graph costs ~0.2."""
+    return (
+        f"v4l2src device={device} do-timestamp=true"
+        f" ! image/jpeg,width={EYE_WIDTH},height={EYE_HEIGHT},framerate={FRAME_RATE}/1 ! vajpegdec"
+        f' ! vapostproc ! capsfilter caps="video/x-raw(memory:VAMemory),format=NV12,width={EYE_WIDTH},'
+        f'height={EYE_HEIGHT},framerate={FRAME_RATE}/1"'
+    )
+
+
+def wrist_pipeline(device: str) -> str:
+    """A D405's color stream as system-memory NV12. It is raw YUYV rather than MJPEG, so
+    there is nothing to decode, only a conversion. That runs on the CPU: a vapostproc in a
+    YUYV track aborts Adamo's hw_pipeline backend (GLib "failed to allocate" ~1e14 bytes),
+    whichever memory it outputs to, while videoconvert costs ~10% of one thread per wrist."""
+    return (
+        f"v4l2src device={device} do-timestamp=true"
+        f" ! video/x-raw,format=YUY2,width={WRIST_WIDTH},height={WRIST_HEIGHT},framerate={FRAME_RATE}/1"
+        f' ! videoconvert ! capsfilter caps="video/x-raw,format=NV12,width={WRIST_WIDTH},'
+        f'height={WRIST_HEIGHT},framerate={FRAME_RATE}/1"'
+    )
 
 
 def connect(args: Args) -> adamo.Robot:
@@ -61,11 +104,37 @@ def connect(args: Args) -> adamo.Robot:
             f"&key={robot.local_pairing_key}",
             flush=True,
         )
-    robot.attach_video("zed", pipeline=f'v4l2src device={args.zed} io-mode=mmap ! capsfilter caps="video/x-raw,format=YUY2,width={ZED_WIDTH},height={ZED_HEIGHT},framerate={FRAME_RATE}/1" ! identity drop-buffer-flags=corrupted ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! videoconvert n-threads=2 ! videorate ! capsfilter caps="video/x-raw,format=NV12,framerate={FRAME_RATE}/1"', encoder="vah264enc", backend="hw_pipeline", width=ZED_WIDTH, height=ZED_HEIGHT, fps=FRAME_RATE, bitrate_kbps=ZED_BITRATE_KBPS, rate_control="vbr", adaptive_bitrate=False, stereo=True)
-
-    for device, side in ((args.wrist_left, "left"), (args.wrist_right, "right")):
-        if device:
-            robot.attach_video(f"wrist_{side}", pipeline=f'v4l2src device={device} ! capsfilter caps="image/jpeg,width={WRIST_WIDTH},height={WRIST_HEIGHT},framerate={FRAME_RATE}/1" ! jpegdec ! videoconvert ! capsfilter caps="video/x-raw,format=NV12"', encoder="vah264enc", backend="hw_pipeline", width=WRIST_WIDTH, height=WRIST_HEIGHT, fps=FRAME_RATE, bitrate_kbps=WRIST_BITRATE_KBPS, rate_control="vbr", adaptive_bitrate=False)
+    # backend="hw_pipeline" keeps GStreamer for capture but encodes with Adamo's native VA-API
+    # encoder, avoiding the one-frame decode delay headsets add to vah264enc's output.
+    for (track, eye), device in zip(EYE_TRACKS, (args.eye_left, args.eye_right), strict=True):
+        robot.attach_video(
+            track,
+            pipeline=eye_pipeline(device),
+            encoder="vah264enc",
+            backend="hw_pipeline",
+            width=EYE_WIDTH,
+            height=EYE_HEIGHT,
+            fps=FRAME_RATE,
+            bitrate_kbps=EYE_BITRATE_KBPS,
+            rate_control="vbr",
+            adaptive_bitrate=True,
+            keyframe_distance=KEYFRAME_DISTANCE,
+            **{eye: True},
+        )
+    for _, side in arm_channels(args):
+        robot.attach_video(
+            f"wrist_{side}",
+            pipeline=wrist_pipeline(getattr(args, f"wrist_{side}")),
+            encoder="vah264enc",
+            backend="hw_pipeline",
+            width=WRIST_WIDTH,
+            height=WRIST_HEIGHT,
+            fps=FRAME_RATE,
+            bitrate_kbps=WRIST_BITRATE_KBPS,
+            rate_control="vbr",
+            adaptive_bitrate=True,
+            keyframe_distance=KEYFRAME_DISTANCE,
+        )
 
     return robot
 
