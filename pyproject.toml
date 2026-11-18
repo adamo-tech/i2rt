@@ -137,7 +137,7 @@ dev = [
 # that will not import against modern jax).
 teleop = [
     # 1.0.18+: pairing-key connections, FrameRate constructors, per-track keyframe distance.
-    "adamo>=1.0.19",
+    "adamo>=1.0.28",
     "jax>=0.6",
     "jax-dataclasses>=1.6",
     "jaxlie>=1.5",

@@ -61,11 +61,11 @@ def connect(args: Args) -> adamo.Robot:
             f"&key={robot.local_pairing_key}",
             flush=True,
         )
-    robot.attach_video("zed", pipeline=f'v4l2src device={args.zed} io-mode=mmap ! capsfilter caps="video/x-raw,format=YUY2,width={ZED_WIDTH},height={ZED_HEIGHT},framerate={FRAME_RATE}/1" ! identity drop-buffer-flags=corrupted ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! videoconvert n-threads=2 ! videorate ! capsfilter caps="video/x-raw,format=NV12,framerate={FRAME_RATE}/1"', encoder="vah264enc", backend="hw_pipeline", width=ZED_WIDTH, height=ZED_HEIGHT, fps=FRAME_RATE, bitrate_kbps=ZED_BITRATE_KBPS, rate_control="vbr", adaptive_bitrate=False, stereo=True)
+    robot.attach_video("zed", pipeline=f'v4l2src device={args.zed} io-mode=mmap ! capsfilter caps="video/x-raw,format=YUY2,width={ZED_WIDTH},height={ZED_HEIGHT},framerate={FRAME_RATE}/1" ! identity drop-buffer-flags=corrupted ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! videoconvert n-threads=2 ! videorate ! capsfilter caps="video/x-raw,format=NV12,framerate={FRAME_RATE}/1"', encoder="vah264enc", backend="hw_pipeline", width=ZED_WIDTH, height=ZED_HEIGHT, fps=FRAME_RATE, bitrate_kbps=ZED_BITRATE_KBPS, rate_control="vbr", adaptive_bitrate=True, stereo=True)
 
     for device, side in ((args.wrist_left, "left"), (args.wrist_right, "right")):
         if device:
-            robot.attach_video(f"wrist_{side}", pipeline=f'v4l2src device={device} ! capsfilter caps="image/jpeg,width={WRIST_WIDTH},height={WRIST_HEIGHT},framerate={FRAME_RATE}/1" ! jpegdec ! videoconvert ! capsfilter caps="video/x-raw,format=NV12"', encoder="vah264enc", backend="hw_pipeline", width=WRIST_WIDTH, height=WRIST_HEIGHT, fps=FRAME_RATE, bitrate_kbps=WRIST_BITRATE_KBPS, rate_control="vbr", adaptive_bitrate=False)
+            robot.attach_video(f"wrist_{side}", pipeline=f'v4l2src device={device} ! capsfilter caps="image/jpeg,width={WRIST_WIDTH},height={WRIST_HEIGHT},framerate={FRAME_RATE}/1" ! jpegdec ! videoconvert ! capsfilter caps="video/x-raw,format=NV12"', encoder="vah264enc", backend="hw_pipeline", width=WRIST_WIDTH, height=WRIST_HEIGHT, fps=FRAME_RATE, bitrate_kbps=WRIST_BITRATE_KBPS, rate_control="vbr", adaptive_bitrate=True)
 
     return robot
 
